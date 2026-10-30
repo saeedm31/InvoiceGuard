@@ -83,8 +83,14 @@ SHARED_KEY = _shared_key()
 BEDROCK = os.getenv("LLM_PROVIDER", "anthropic") == "bedrock"  # company AWS account: the task role, no key
 
 
-@st.cache_resource(show_spinner="Starting the ERP, documents, mail and notify MCP servers (first start only)...")
-def service():
+def _code_version() -> str:
+    """Changes when the package code changes, so a redeploy starts a fresh service and fresh MCP servers."""
+    return str(max(f.stat().st_mtime_ns for f in (C.ROOT / "invoiceguard").rglob("*.py")))
+
+
+@st.cache_resource(show_spinner="Starting the ERP, documents, mail and notify MCP servers (first start only)...",
+                   max_entries=1)
+def service(code_version: str):
     return open_service(C.Settings().data_dir)
 
 
@@ -122,7 +128,7 @@ def show_invoice(doc_id: str, where: str) -> None:
                            key=f"dl-{where}-{doc_id}")
 
 
-svc = service()
+svc = service(_code_version())
 ss = st.session_state
 ss.setdefault("meter", Meter())
 ss.setdefault("session_eur", 0.0)
@@ -307,7 +313,7 @@ with tab_case:
                 st.markdown("**Fields the model read off the PDF**")
                 show = {k: v for k, v in inv.items() if k != "lines"}
                 show["iban"] = (show.get("iban") or "")[:4] + " **** " + (show.get("iban") or "")[-4:] if show.get("iban") else None
-                st.dataframe(pd.DataFrame([show]).T.rename(columns={0: "value"}), width="stretch")
+                st.dataframe(pd.DataFrame([show]).T.rename(columns={0: "value"}).astype(str), width="stretch")
                 st.dataframe(pd.DataFrame(inv["lines"]), hide_index=True, width="stretch")
         with right:
             if note.get("email_body"):
