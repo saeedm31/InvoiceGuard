@@ -1,0 +1,30 @@
+name: terraform
+on:
+  push:
+    paths: ["deploy/aws/terraform/**", ".github/workflows/terraform.yml"]
+  pull_request:
+    paths: ["deploy/aws/terraform/**", ".github/workflows/terraform.yml"]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/aws/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Format
+        run: terraform fmt -check -recursive -diff
+      - name: Init (no backend, no AWS account needed)
+        run: terraform init -backend=false -input=false
+      - name: Validate
+        run: terraform validate
+      - name: Security scan (Checkov, report only)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: deploy/aws/terraform
+          framework: terraform
+          quiet: true
+          soft_fail: true
