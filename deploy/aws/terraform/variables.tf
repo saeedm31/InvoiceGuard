@@ -156,8 +156,15 @@ variable "graph_client_id" {
 
 # ---------- operations ----------
 variable "log_retention_days" {
-  type    = number
-  default = 30
+  description = "Days to keep app and VPC flow logs (one year by default, for audits)."
+  type        = number
+  default     = 365
+}
+
+variable "alb_logs_bucket" {
+  description = "S3 bucket for load-balancer access logs, usually the company's central log bucket. Empty: off."
+  type        = string
+  default     = ""
 }
 
 variable "alarm_email" {

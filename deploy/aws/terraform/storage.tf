@@ -1,8 +1,28 @@
 # ---------- encryption key ----------
 resource "aws_kms_key" "main" {
-  description             = "${local.prefix}: secrets and the data file system"
+  description             = "${local.prefix}: secrets, data file system, images and logs"
   enable_key_rotation     = true
   deletion_window_in_days = 30
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AccountAdministersTheKeyThroughIam"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${local.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid       = "CloudWatchLogsOfThisAccount"
+        Effect    = "Allow"
+        Principal = { Service = "logs.${var.region}.amazonaws.com" }
+        Action    = ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"]
+        Resource  = "*"
+        Condition = { ArnLike = { "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${var.region}:${local.account_id}:log-group:*" } }
+      },
+    ]
+  })
 }
 
 resource "aws_kms_alias" "main" {
@@ -121,6 +141,7 @@ resource "random_password" "approval_secret" {
 }
 
 resource "aws_secretsmanager_secret" "app" {
+  #checkov:skip=CKV2_AWS_57:The approval key only signs 15-minute tokens and is rotated by hand; the other values belong to external systems
   name                    = "${local.prefix}/app"
   description             = "InvoiceGuard runtime secrets"
   kms_key_id              = aws_kms_key.main.arn
@@ -146,4 +167,5 @@ resource "aws_secretsmanager_secret_version" "app" {
 resource "aws_cloudwatch_log_group" "app" {
   name              = "/ecs/${local.prefix}"
   retention_in_days = var.log_retention_days
+  kms_key_id        = aws_kms_key.main.arn
 }

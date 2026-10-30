@@ -8,6 +8,51 @@ resource "aws_vpc" "main" {
   tags                 = { Name = local.prefix }
 }
 
+# Nothing may use the VPC's default security group: Terraform keeps it with no rules.
+resource "aws_default_security_group" "default" {
+  vpc_id = aws_vpc.main.id
+}
+
+# VPC flow logs: a record of every connection, kept and encrypted like the app logs.
+resource "aws_cloudwatch_log_group" "flow" {
+  name              = "/vpc/${local.prefix}"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = aws_kms_key.main.arn
+}
+
+resource "aws_flow_log" "main" {
+  vpc_id          = aws_vpc.main.id
+  traffic_type    = "ALL"
+  log_destination = aws_cloudwatch_log_group.flow.arn
+  iam_role_arn    = aws_iam_role.flow.arn
+}
+
+resource "aws_iam_role" "flow" {
+  name = "${local.prefix}-flow-logs"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "vpc-flow-logs.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = { StringEquals = { "aws:SourceAccount" = local.account_id } }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "flow" {
+  name = "write-flow-logs"
+  role = aws_iam_role.flow.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"]
+      Resource = "${aws_cloudwatch_log_group.flow.arn}:*"
+    }]
+  })
+}
+
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
   tags   = { Name = local.prefix }
@@ -91,6 +136,7 @@ resource "aws_security_group" "alb" {
 
 resource "aws_vpc_security_group_ingress_rule" "alb" {
   for_each          = { for pair in setproduct(var.allowed_cidrs, local.https ? [80, 443] : [80]) : "${pair[0]}-${pair[1]}" => pair }
+  description       = "Web traffic from allowed networks"
   security_group_id = aws_security_group.alb.id
   cidr_ipv4         = each.value[0]
   from_port         = each.value[1]
@@ -99,6 +145,7 @@ resource "aws_vpc_security_group_ingress_rule" "alb" {
 }
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_app" {
+  description                  = "To the app tasks"
   security_group_id            = aws_security_group.alb.id
   referenced_security_group_id = aws_security_group.app.id
   from_port                    = 8501
@@ -123,6 +170,7 @@ resource "aws_security_group" "app" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "app_from_alb" {
+  description                  = "From the load balancer only"
   security_group_id            = aws_security_group.app.id
   referenced_security_group_id = aws_security_group.alb.id
   from_port                    = 8501
@@ -150,6 +198,7 @@ resource "aws_vpc_security_group_egress_rule" "app_smtp" {
 }
 
 resource "aws_vpc_security_group_egress_rule" "app_to_efs" {
+  description                  = "NFS to the data file system"
   security_group_id            = aws_security_group.app.id
   referenced_security_group_id = aws_security_group.efs.id
   from_port                    = 2049
@@ -164,6 +213,7 @@ resource "aws_security_group" "efs" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "efs_from_app" {
+  description                  = "NFS from the app tasks only"
   security_group_id            = aws_security_group.efs.id
   referenced_security_group_id = aws_security_group.app.id
   from_port                    = 2049

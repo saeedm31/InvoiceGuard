@@ -33,6 +33,7 @@ provider "aws" {
 data "aws_caller_identity" "current" {}
 
 data "aws_availability_zones" "available" {
+  #checkov:skip=CKV_AWS_394:Only the first two zones (sorted) are used, so a new zone does not change the subnets
   state = "available"
 }
 

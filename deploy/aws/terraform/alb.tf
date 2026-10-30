@@ -2,6 +2,8 @@
 # require the company's single sign-on (OIDC) before any request reaches the app.
 
 resource "aws_lb" "app" {
+  #checkov:skip=CKV2_AWS_28:Internal tool behind SSO and allowed networks; add AWS WAF when it faces the internet
+  #checkov:skip=CKV_AWS_91:Access logs go to the company's central log bucket when alb_logs_bucket is set
   name                       = local.prefix
   load_balancer_type         = "application"
   internal                   = var.internal_alb
@@ -10,9 +12,19 @@ resource "aws_lb" "app" {
   idle_timeout               = 300 # Streamlit keeps a websocket open
   drop_invalid_header_fields = true
   enable_deletion_protection = var.environment == "prod"
+
+  dynamic "access_logs" {
+    for_each = var.alb_logs_bucket == "" ? [] : [1]
+    content {
+      bucket  = var.alb_logs_bucket
+      prefix  = local.prefix
+      enabled = true
+    }
+  }
 }
 
 resource "aws_lb_target_group" "app" {
+  #checkov:skip=CKV_AWS_378:TLS ends at the load balancer; the hop to the task stays in private subnets, allowed only by security groups
   name                 = local.prefix
   port                 = 8501
   protocol             = "HTTP"
@@ -71,6 +83,7 @@ resource "aws_lb_listener" "https" {
 
 # Port 80: redirect to HTTPS, or serve the app directly when there is no certificate yet.
 resource "aws_lb_listener" "http" {
+  #checkov:skip=CKV_AWS_2:Port 80 only redirects to HTTPS (or serves a first test before a certificate exists)
   load_balancer_arn = aws_lb.app.arn
   port              = 80
   protocol          = "HTTP"
