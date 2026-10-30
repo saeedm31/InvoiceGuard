@@ -1,0 +1,82 @@
+# Deploy to AWS ECS Fargate. Run it by hand (Actions > deploy-aws > Run workflow).
+# Needs a GitHub environment (dev or prod) with the variables printed by `terraform output github_variables`.
+# No AWS keys in GitHub: the job gets short-lived credentials through OIDC.
+name: deploy-aws
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment to deploy to
+        type: choice
+        options: [dev, prod]
+        default: dev
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: pytest -q
+      - name: Evals gate (no unsafe payments)
+        run: python -m invoiceguard eval
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      CLUSTER: ${{ vars.ECS_CLUSTER }}
+      SERVICE: ${{ vars.ECS_SERVICE }}
+      FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push the image (tag = commit SHA; tags are immutable)
+        id: image
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+        run: |
+          if aws ecr describe-images --repository-name "${{ vars.ECR_REPOSITORY }}" --image-ids imageTag="${{ github.sha }}" >/dev/null 2>&1; then
+            echo "Image for this commit already exists"
+          else
+            docker build -t "$IMAGE" .
+            docker push "$IMAGE"
+          fi
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+      - name: Register a task definition revision with the new image
+        id: taskdef
+        run: |
+          aws ecs describe-task-definition --task-definition "$FAMILY" --query taskDefinition > current.json
+          jq --arg img "${{ steps.image.outputs.image }}" '
+            .containerDefinitions |= map(.image = $img)
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities,
+                  .registeredAt, .registeredBy, .deregisteredAt)' current.json > next.json
+          ARN=$(aws ecs register-task-definition --cli-input-json file://next.json \
+                  --query taskDefinition.taskDefinitionArn --output text)
+          echo "arn=$ARN" >> "$GITHUB_OUTPUT"
+      - name: Roll out and wait until healthy (the circuit breaker rolls back a failed release)
+        run: |
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+            --task-definition "${{ steps.taskdef.outputs.arn }}" --desired-count 1 >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+      - name: Smoke test
+        if: ${{ vars.APP_URL != '' }}
+        run: curl -fsS --retry 10 --retry-delay 6 "${{ vars.APP_URL }}/_stcore/health"
+      - name: Summary
+        run: |
+          echo "### Deployed ${{ github.sha }} to ${{ inputs.environment }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Task definition: ${{ steps.taskdef.outputs.arn }}" >> "$GITHUB_STEP_SUMMARY"
