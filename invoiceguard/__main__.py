@@ -1,4 +1,4 @@
-"""Command line: python -m invoiceguard {build|run DOC-001|eval [--live]}"""
+"""Command line: python -m invoiceguard {build|ensure|run DOC-001|eval [--live]}"""
 
 from __future__ import annotations
 
@@ -14,6 +14,10 @@ def main() -> int:
     if cmd == "build":
         labels = simulate.build(Settings().data_dir)
         print(f"Built {len(labels)} inbox invoices in {Settings().data_dir}")
+        return 0
+    if cmd == "ensure":  # build only when missing (container start-up must not wipe the data)
+        simulate.ensure_built(Settings().data_dir)
+        print(f"Data ready in {Settings().data_dir}")
         return 0
     if cmd == "run":
         from .service import open_service

@@ -8,6 +8,7 @@ signed token for exactly that invoice and amount; the ERP's payment tool checks 
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,7 +16,7 @@ from pathlib import Path
 from .agent.graph import InvoiceAgent
 from .agent.scripted import ScriptedAnthropic
 from .audit import AuditLog
-from .config import TOKEN_TTL_S, Settings, approval_secret
+from .config import APP_URL, TOKEN_TTL_S, Settings, approval_secret
 from .llm import Meter, MeteredClient, make_client
 from .mcp_hub import MCPHub
 from .security import mint_token
@@ -65,12 +66,65 @@ class Service:
                  inv.get("gross"), vendor, res.get("invoice_id"), mode, res["cost"]["eur"], res["seconds"], None,
                  json.dumps(res, default=str)),
             )
+        self._notify(res)
         return res
+
+    # ---------- notifications (code decides who is told what; the model writes none of it) ----------
+    def _notify(self, res: dict) -> None:
+        inv = res.get("extracted") or {}
+        case_id = res["case_id"]
+        vendor = None
+        if res.get("vendor_id"):  # the name from the vendor master, never from the PDF
+            r = self.hub.call("get_vendor", {"vendor_id": res["vendor_id"]})
+            vendor = r.data.get("name") if r.ok else None
+        number = re.sub(r"[^A-Za-z0-9/._-]", "", str(inv.get("invoice_number") or ""))[:30] or "?"
+        about = f"{vendor or 'Unknown supplier'}, invoice {number}, EUR {float(inv.get('gross') or 0):,.2f}"
+        link = f"{APP_URL}/?case={case_id}" if APP_URL else None
+        sent = []
+        if res["status"] == "awaiting_approval":
+            role = "role:ap_manager" if float(inv.get("gross") or 0) <= APPROVERS["rui.matos"][1] else "role:cfo"
+            text = f"{about}. All checks passed; the total is above the EUR 10,000 auto-pay limit. Case {case_id}."
+            sent.append(self.hub.call("post_teams", {"channel": "teams:ap-approvals", "title": "Invoice waiting for approval",
+                                                     "text": text, "ref": case_id, "link": link}))
+            sent.append(self.hub.call("send_email", {"recipient": role, "subject": f"Approval needed: {about}", "ref": case_id,
+                                                     "body": f"Hello,\n\n{text}\n\nApprove or decline it in InvoiceGuard"
+                                                             + (f": {link}" if link else ".") + "\n\nInvoiceGuard"}))
+        alerts = [c["detail"] for c in res.get("checks") or [] if c["code"] == "BANK_MISMATCH" and not c["ok"]]
+        if res.get("scan"):
+            alerts.append("The PDF contains text aimed at AI systems (possible prompt injection).")
+        if alerts:
+            sent.append(self.hub.call("post_teams", {"channel": "teams:ap-alerts", "title": "Possible invoice fraud",
+                                                     "text": f"{about}. " + " ".join(alerts) + f" Status: {res['status']}.",
+                                                     "ref": case_id, "link": link}))
+        for r in sent:
+            self.audit.write("notification", dict(ok=r.ok, result=r.data, error=r.error), run_id=case_id, actor="code")
+
+    def send_to_supplier(self, case_id: str, by: str, subject: str, body: str) -> dict:
+        """A person reviewed the email draft and clicks Send. The address comes from the vendor master."""
+        c = self.case(case_id)
+        vendor_id = (c or {}).get("payload", {}).get("vendor_id")
+        if not c or c["status"] not in ("on_hold", "rejected") or not vendor_id:
+            return {"ok": False, "error": "Only held or rejected invoices from a known supplier get an email."}
+        if any(m["recipient"] == f"vendor:{vendor_id}" for m in self.outbox(case_id)):
+            return {"ok": False, "error": "An email for this case was already sent."}
+        r = self.hub.call("send_email", {"recipient": f"vendor:{vendor_id}", "subject": subject, "body": body,
+                                         "ref": case_id, "sent_by": by})
+        self.audit.write("supplier_email", dict(by=by, ok=r.ok, result=r.data, error=r.error), run_id=case_id, actor=by)
+        return {"ok": r.ok, **(r.data or {}), "error": r.error}
+
+    def outbox(self, ref: str | None = None) -> list[dict]:
+        r = self.hub.call("list_outbox", {"ref": ref} if ref else {})
+        return r.data["messages"] if r.ok else []
+
+    def notify_mode(self) -> str:
+        r = self.hub.call("list_outbox", {"limit": 1})
+        return r.data["mode"] if r.ok else "unknown"
 
     def reset(self) -> None:
         """Rebuild the simulated company: fresh ERP, inbox, no cases, new audit log."""
         from .simulate import build
 
+        (self.s.data_dir / "notify.db").unlink(missing_ok=True)  # the outbox starts empty too
         build(self.s.data_dir)
         self.audit = AuditLog(self.s.audit_db)
         with self._con() as con:
@@ -110,6 +164,11 @@ class Service:
                          run_id=case_id, actor=approver)
         if r.ok:
             self._update(case_id, "scheduled", approver)
+            n = self.hub.call("post_teams", {"channel": "teams:ap-approvals", "title": "Invoice approved",
+                                             "text": f"Case {case_id}: approved by {approver} ({role}); payment "
+                                                     f"{r.data['payment_id']} scheduled for {r.data['pay_on']}.",
+                                             "ref": case_id, "sent_by": approver})
+            self.audit.write("notification", dict(ok=n.ok, result=n.data, error=n.error), run_id=case_id, actor="code")
             return {"ok": True, "payment": r.data}
         return {"ok": False, "error": r.error}
 

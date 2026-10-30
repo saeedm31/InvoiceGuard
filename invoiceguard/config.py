@@ -13,6 +13,7 @@ APPROVAL_LIMIT_EUR = float(os.getenv("APPROVAL_LIMIT_EUR", "10000"))  # above th
 PRICE_TOLERANCE = float(os.getenv("PRICE_TOLERANCE", "0.02"))  # 2% above the PO price is still fine
 TOKEN_TTL_S = int(os.getenv("TOKEN_TTL_S", "900"))  # an approval token is valid for 15 minutes
 MAX_AGENT_STEPS = int(os.getenv("MAX_AGENT_STEPS", "8"))
+APP_URL = os.getenv("APP_URL", "").rstrip("/")  # used for links in Teams cards
 
 
 @dataclass

@@ -8,6 +8,7 @@ Every call's token counts come from the provider's reply; euros are list price x
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 from dataclasses import asdict, dataclass
@@ -40,6 +41,9 @@ BEDROCK_IDS = {
     "claude-sonnet-5-5": "anthropic.claude-sonnet-5-5",
     "claude-opus-5-5": "anthropic.claude-opus-5-5",
 }
+# The model ids enabled in the company's Bedrock account (they differ per region and over time), e.g.
+# BEDROCK_MODEL_IDS='{"claude-sonnet-4-6": "eu.anthropic.claude-sonnet-4-6"}'
+BEDROCK_IDS.update(json.loads(os.getenv("BEDROCK_MODEL_IDS") or "{}"))
 
 
 @dataclass
