@@ -92,6 +92,35 @@ def shared_spend() -> dict:
     return {"day": "", "eur": 0.0}
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
+def page_png(path: str, mtime: float) -> bytes:
+    """First page of an invoice PDF as a PNG, for viewing. mtime makes the cache follow a data reset."""
+    import io
+
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(path)
+    try:
+        img = pdf[0].render(scale=1.6).to_pil().convert("RGB")
+    finally:
+        pdf.close()
+    ink = img.convert("L").point(lambda v: 255 if v < 200 else 0).getbbox()  # visible content only
+    if ink:
+        pad = 40
+        img = img.crop((0, max(ink[1] - pad, 0), img.width, min(ink[3] + pad, img.height)))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def show_invoice(doc_id: str, where: str) -> None:
+    pdf = svc.s.inbox / f"{doc_id}.pdf"
+    if pdf.exists():
+        st.image(page_png(str(pdf), pdf.stat().st_mtime), width="stretch")
+        st.download_button("⬇ Download the PDF", pdf.read_bytes(), file_name=pdf.name, mime="application/pdf",
+                           key=f"dl-{where}-{doc_id}")
+
+
 svc = service()
 ss = st.session_state
 ss.setdefault("meter", Meter())
@@ -196,6 +225,11 @@ with tab_inbox:
             st.rerun()
         st.caption("Good ones to try: a **hidden instructions** or **inject price** invoice (prompt injection), "
                    "**bank** (changed IBAN), **big** (needs a person), **duplicate**.")
+        with st.expander(f"👁 See invoice {pick}", expanded=True):
+            show_invoice(pick, "inbox")
+            if labels[pick]["kind"] == "inject_clean":
+                st.caption("This one hides near-white, tiny text at the bottom: invisible on paper, but in the text "
+                           "the model reads. Run it and open the Case file.")
     with left:
         rows = []
         for d in sorted(labels):
@@ -275,9 +309,8 @@ with tab_case:
             st.markdown("**What happened in the ERP**")
             for a in p.get("actions") or []:
                 st.markdown(f"- `{a[0]}`: {a[1] if isinstance(a[1], str) else json.dumps(a[1])}")
-            pdf = svc.s.inbox / f"{case['doc_id']}.pdf"
-            if pdf.exists():
-                st.download_button("⬇ Download the invoice PDF", pdf.read_bytes(), file_name=pdf.name, mime="application/pdf")
+            st.markdown("**The invoice**")
+            show_invoice(case["doc_id"], "case")
             with st.expander("Invoice text as the model saw it (untrusted)"):
                 r = svc.hub.call("read_invoice", {"doc_id": case["doc_id"]})
                 st.code(r.data["text"] if r.ok else r.error, language="text")
