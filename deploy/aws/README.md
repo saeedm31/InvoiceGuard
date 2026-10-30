@@ -25,7 +25,7 @@ flowchart LR
 
 | Area | Resources | Why |
 | --- | --- | --- |
-| Network | VPC, 2 public + 2 private subnets, NAT gateway, S3 gateway endpoint | Tasks have no public IP; only the load balancer is reachable |
+| Network | VPC, 2 public + 2 private subnets, NAT gateway, S3 gateway endpoint, VPC flow logs, locked default security group | Tasks have no public IP; only the load balancer is reachable; every connection is logged |
 | Entry | Application Load Balancer, HTTPS (TLS 1.3 policy), optional OIDC login | Company SSO (Entra ID, Okta) before any request reaches the app; `internal_alb = true` keeps it on the company network |
 | Compute | ECS cluster, Fargate service, one task with 6 containers | The app plus the 4 MCP servers as sidecars over Streamable HTTP on localhost, and an init container that prepares the data |
 | Data | EFS (KMS-encrypted, TLS-only, access point, daily backup) | SQLite databases and invoice PDFs survive restarts and redeploys |
@@ -33,7 +33,7 @@ flowchart LR
 | AI | Task-role permission for Bedrock, Anthropic models only, EU regions only | No API key; model calls stay in the EU and show up in CloudTrail |
 | Images | ECR, immutable tags, scan on push, keep the last 20 | The tag is the commit SHA, so every release can be traced to a commit |
 | CI/CD | GitHub OIDC provider and a deploy role limited to one repo, one environment, one service | No AWS keys stored in GitHub |
-| Operations | CloudWatch logs (30 days), Container Insights, alarms for "app down" and 5xx errors, SNS email | You find out before users do |
+| Operations | CloudWatch logs (KMS-encrypted, one year), Container Insights, alarms for "app down" and 5xx errors, SNS email, optional load-balancer access logs | You find out before users do, and audits have the trail |
 
 ## Deploy in 5 steps
 
@@ -50,7 +50,7 @@ terraform output github_variables
 2. **Actions → deploy-aws → Run workflow.** It runs the tests and the eval gate, builds the image, pushes it to ECR with the commit SHA as the tag, registers a task definition, rolls out, and waits until the service is healthy. A failed release is rolled back automatically.
 3. Optional: fill the secret named in `terraform output secret_name` (Graph client secret, Teams webhook URLs) and set `notify_mode = "live"` to really send emails and Teams cards.
 
-Check it: `terraform fmt`, `validate` and a Checkov security scan run in the `terraform` workflow on every change to this folder.
+Check it: `terraform fmt`, `validate` and a Checkov security scan run in the `terraform` workflow on every change to this folder. Where a Checkov rule is skipped on purpose (WAF, TLS between the load balancer and the task, secret rotation), the reason is written next to the resource as a `#checkov:skip` comment.
 
 ## Choices and trade-offs
 
