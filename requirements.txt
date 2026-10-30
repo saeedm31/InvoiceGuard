@@ -1,0 +1,9 @@
+# App, agent and MCP servers
+streamlit>=1.50
+langgraph>=1.0
+anthropic[bedrock]>=1.0
+mcp>=2.2,<3
+pydantic>=2.7
+pypdf>=5.0
+reportlab>=4.0
+pandas>=2.2

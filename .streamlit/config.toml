@@ -1,0 +1,22 @@
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+# Dark navy with an orange accent, like the portfolio decks. Fonts are loaded by the CSS in app.py.
+[theme]
+base = "dark"
+primaryColor = "#F2A65A"
+backgroundColor = "#0B1424"
+secondaryBackgroundColor = "#16253D"
+textColor = "#F3F1EA"
+linkColor = "#7FD1C7"
+borderColor = "#2E4566"
+showWidgetBorder = true
+baseRadius = "0.75rem"
+chartCategoricalColors = ["#F2A65A", "#7FD1C7", "#5B8DEF", "#E8735A", "#B9A6F2", "#8FA3BF", "#6FCF97", "#F2C35A"]
+
+[theme.sidebar]
+backgroundColor = "#0E1A2E"
+secondaryBackgroundColor = "#16253D"

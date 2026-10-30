@@ -1,0 +1,40 @@
+# The app plus the three MCP servers as separate services over Streamable HTTP.
+# They share the data volume (the simulated ERP) and the approval secret (set it in .env).
+x-common: &common
+  build: .
+  environment:
+    IG_DATA_DIR: /data
+    APPROVAL_SECRET: ${APPROVAL_SECRET:?set APPROVAL_SECRET in .env}
+  volumes: [igdata:/data]
+
+services:
+  init:  # builds the simulated company once
+    <<: *common
+    command: ["python", "-m", "invoiceguard", "build"]
+  documents:
+    <<: *common
+    command: ["python", "-m", "invoiceguard.mcp_servers.documents", "--http", "8101"]
+    environment: {IG_DATA_DIR: /data, APPROVAL_SECRET: "${APPROVAL_SECRET}", MCP_ALLOWED_HOSTS: "documents:*"}
+    depends_on: {init: {condition: service_completed_successfully}}
+  erp:
+    <<: *common
+    command: ["python", "-m", "invoiceguard.mcp_servers.erp", "--http", "8102"]
+    environment: {IG_DATA_DIR: /data, APPROVAL_SECRET: "${APPROVAL_SECRET}", MCP_ALLOWED_HOSTS: "erp:*"}
+    depends_on: {init: {condition: service_completed_successfully}}
+  mail:
+    <<: *common
+    command: ["python", "-m", "invoiceguard.mcp_servers.mail", "--http", "8103"]
+    environment: {IG_DATA_DIR: /data, APPROVAL_SECRET: "${APPROVAL_SECRET}", MCP_ALLOWED_HOSTS: "mail:*"}
+    depends_on: {init: {condition: service_completed_successfully}}
+  app:
+    <<: *common
+    ports: ["8501:8501"]
+    environment:
+      IG_DATA_DIR: /data
+      APPROVAL_SECRET: "${APPROVAL_SECRET}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      MCP_URLS: "documents=http://documents:8101/mcp,erp=http://erp:8102/mcp,mail=http://mail:8103/mcp"
+    depends_on: [documents, erp, mail]
+
+volumes:
+  igdata:

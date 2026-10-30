@@ -1,0 +1,18 @@
+[project]
+name = "invoiceguard"
+version = "0.1.0"
+description = "Accounts-payable AI agent: MCP servers, human approval, evals"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501", "E731"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
