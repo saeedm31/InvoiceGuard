@@ -54,6 +54,7 @@ class State(TypedDict, total=False):
     tool_calls: list
     findings: dict | None
     facts: dict
+    vendor_id: str | None  # from the ERP lookup done by code, not from the model or the PDF
     checks: list
     decision: str
     exceptions: list
@@ -282,7 +283,7 @@ class InvoiceAgent:
                                                       or f"Invoice {inv['invoice_number']}", "body": note["email_body"]})
                 if m.ok:
                     acts.append(("email_draft", m.data["draft_id"]))
-        return {"actions": acts, "invoice_id": iid, "status": status}
+        return {"actions": acts, "invoice_id": iid, "status": status, "vendor_id": v["vendor_id"] if v else None}
 
     # ---------- wiring ----------
     @staticmethod
@@ -330,7 +331,7 @@ class InvoiceAgent:
             state = self._run_plain(state)
         cost = total(self.llm.meter.since(mark))
         out = {k: state.get(k) for k in ("case_id", "doc_id", "extracted", "findings", "checks", "decision", "exceptions",
-                                         "note", "actions", "invoice_id", "status", "tool_calls", "scan")}
+                                         "note", "actions", "invoice_id", "status", "tool_calls", "scan", "vendor_id")}
         out.update(cost=cost, seconds=round(time.time() - t0, 2), engine="langgraph" if self.graph else "plain",
                    steps=state.get("steps", 0))
         self._log(state, "case_end", dict(decision=out["decision"], status=out["status"], exceptions=out["exceptions"],

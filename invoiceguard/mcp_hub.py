@@ -1,4 +1,4 @@
-"""MCP client: starts the three MCP servers as child processes (stdio) and calls their tools.
+"""MCP client: starts the four MCP servers as child processes (stdio) and calls their tools.
 
 The SDK is async; Streamlit and the agent graph are not. One background event loop owns the
 sessions, and `call()` is a normal blocking function that is safe to use from any thread.
@@ -26,6 +26,7 @@ SERVERS = {
     "documents": "invoiceguard.mcp_servers.documents",
     "erp": "invoiceguard.mcp_servers.erp",
     "mail": "invoiceguard.mcp_servers.mail",
+    "notify": "invoiceguard.mcp_servers.notify",
 }
 # The only tools the model may call. Each must also be marked read-only by its server.
 AGENT_TOOLS = {

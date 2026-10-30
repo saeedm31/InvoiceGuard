@@ -1,4 +1,4 @@
-# The app plus the three MCP servers as separate services over Streamable HTTP.
+# The app plus the four MCP servers as separate services over Streamable HTTP.
 # They share the data volume (the simulated ERP) and the approval secret (set it in .env).
 x-common: &common
   build: .
@@ -8,9 +8,9 @@ x-common: &common
   volumes: [igdata:/data]
 
 services:
-  init:  # builds the simulated company once
+  init:  # builds the simulated company if it is not there yet
     <<: *common
-    command: ["python", "-m", "invoiceguard", "build"]
+    command: ["python", "-m", "invoiceguard", "ensure"]
   documents:
     <<: *common
     command: ["python", "-m", "invoiceguard.mcp_servers.documents", "--http", "8101"]
@@ -26,6 +26,22 @@ services:
     command: ["python", "-m", "invoiceguard.mcp_servers.mail", "--http", "8103"]
     environment: {IG_DATA_DIR: /data, APPROVAL_SECRET: "${APPROVAL_SECRET}", MCP_ALLOWED_HOSTS: "mail:*"}
     depends_on: {init: {condition: service_completed_successfully}}
+  notify:  # NOTIFY_MODE=outbox stores messages only; set live + Graph/SES/Teams settings to deliver
+    <<: *common
+    command: ["python", "-m", "invoiceguard.mcp_servers.notify", "--http", "8104"]
+    environment:
+      IG_DATA_DIR: /data
+      MCP_ALLOWED_HOSTS: "notify:*"
+      NOTIFY_MODE: "${NOTIFY_MODE:-outbox}"
+      TEAMS_WEBHOOK_AP_APPROVALS: "${TEAMS_WEBHOOK_AP_APPROVALS:-}"
+      TEAMS_WEBHOOK_AP_ALERTS: "${TEAMS_WEBHOOK_AP_ALERTS:-}"
+      EMAIL_BACKEND: "${EMAIL_BACKEND:-graph}"
+      GRAPH_TENANT_ID: "${GRAPH_TENANT_ID:-}"
+      GRAPH_CLIENT_ID: "${GRAPH_CLIENT_ID:-}"
+      GRAPH_CLIENT_SECRET: "${GRAPH_CLIENT_SECRET:-}"
+      GRAPH_SENDER: "${GRAPH_SENDER:-}"
+      APP_URL: "${APP_URL:-http://localhost:8501}"
+    depends_on: {init: {condition: service_completed_successfully}}
   app:
     <<: *common
     ports: ["8501:8501"]
@@ -33,8 +49,9 @@ services:
       IG_DATA_DIR: /data
       APPROVAL_SECRET: "${APPROVAL_SECRET}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      MCP_URLS: "documents=http://documents:8101/mcp,erp=http://erp:8102/mcp,mail=http://mail:8103/mcp"
-    depends_on: [documents, erp, mail]
+      MCP_URLS: "documents=http://documents:8101/mcp,erp=http://erp:8102/mcp,mail=http://mail:8103/mcp,notify=http://notify:8104/mcp"
+      APP_URL: "${APP_URL:-http://localhost:8501}"
+    depends_on: [documents, erp, mail, notify]
 
 volumes:
   igdata:

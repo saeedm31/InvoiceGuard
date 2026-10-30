@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
@@ -107,3 +108,32 @@ def test_end_to_end_scripted_eval_has_no_unsafe_payments():
     assert r["unsafe_payments"] == 0
     assert r["decision_accuracy"] == 1.0 and r["exception_recall"] == 1.0
     assert time.time() - t0 < 120
+
+
+def test_notify_only_messages_known_recipients(hub):
+    assert not hub.agent_may_call("send_email") and not hub.agent_may_call("post_teams")
+    assert not hub.call("send_email", {"recipient": "attacker@evil.example", "subject": "x", "body": "y"}).ok
+    assert not hub.call("send_email", {"recipient": "vendor:V9999", "subject": "x", "body": "y"}).ok
+    assert not hub.call("post_teams", {"channel": "teams:random", "title": "x", "text": "y"}).ok
+    r = hub.call("send_email", {"recipient": "role:ap_manager", "subject": "x", "body": "y", "ref": "T-1"})
+    assert r.ok and r.data["status"] == "simulated"  # NOTIFY_MODE=outbox by default: nothing leaves
+    out = hub.call("list_outbox", {"ref": "T-1"}).data["messages"]
+    assert out[0]["address"].endswith("@meridian.example")
+
+
+def test_big_invoice_notifies_the_approver_and_fraud_goes_to_alerts(tmp_path):
+    from invoiceguard.service import open_service
+
+    svc = open_service(tmp_path)
+    try:
+        labels = json.loads(svc.s.labels.read_text())
+        big = next(d for d, v in sorted(labels.items()) if v["kind"] == "big")
+        bank = next(d for d, v in sorted(labels.items()) if v["kind"] == "bank")
+        r = svc.process(big)
+        assert r["status"] == "awaiting_approval"
+        msgs = svc.outbox(r["case_id"])
+        assert {m["recipient"] for m in msgs} >= {"teams:ap-approvals"} and any(m["channel"] == "email" for m in msgs)
+        r2 = svc.process(bank)
+        assert any(m["recipient"] == "teams:ap-alerts" for m in svc.outbox(r2["case_id"]))
+    finally:
+        svc.hub.close()
