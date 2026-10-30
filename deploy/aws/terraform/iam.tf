@@ -65,8 +65,8 @@ data "aws_iam_policy_document" "task" {
   dynamic "statement" {
     for_each = var.llm_provider == "bedrock" ? [1] : []
     content {
-      sid       = "ClaudeOnBedrock"
-      actions   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+      sid     = "ClaudeOnBedrock"
+      actions = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
       resources = concat(
         [for r in var.bedrock_regions : "arn:aws:bedrock:${r}::foundation-model/anthropic.*"],
         [for r in var.bedrock_regions : "arn:aws:bedrock:${r}:${local.account_id}:inference-profile/*"],
