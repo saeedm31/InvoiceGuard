@@ -1,0 +1,6 @@
+# Copy to backend.hcl (not committed). The bucket must exist, with versioning and encryption on.
+bucket       = "my-company-terraform-state"
+key          = "invoiceguard/dev/terraform.tfstate"
+region       = "eu-central-1"
+encrypt      = true
+use_lockfile = true # S3-native state locking, no DynamoDB table needed

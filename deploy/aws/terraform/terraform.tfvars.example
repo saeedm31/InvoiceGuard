@@ -1,0 +1,35 @@
+# Copy to terraform.tfvars (not committed) and adjust.
+environment = "dev"
+region      = "eu-central-1"
+
+# Internal tool: reachable from the company network only.
+internal_alb  = false
+allowed_cidrs = ["0.0.0.0/0"] # e.g. ["203.0.113.0/24"] for the office / VPN egress
+
+# HTTPS and Microsoft Entra ID single sign-on at the load balancer
+# certificate_arn = "arn:aws:acm:eu-central-1:123456789012:certificate/..."
+# app_domain      = "invoiceguard.example.com"
+# oidc = {
+#   issuer                 = "https://login.microsoftonline.com/<tenant-id>/v2.0"
+#   authorization_endpoint = "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/authorize"
+#   token_endpoint         = "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token"
+#   user_info_endpoint     = "https://graph.microsoft.com/oidc/userinfo"
+#   client_id              = "<app-registration-client-id>"
+# }
+# oidc_client_secret = "set with TF_VAR_oidc_client_secret, not in this file"
+
+# Claude on Amazon Bedrock: use the model or inference-profile ids enabled in your account.
+llm_provider = "bedrock"
+# bedrock_model_ids = {
+#   "claude-sonnet-4-6" = "eu.anthropic.claude-sonnet-4-6"
+#   "claude-haiku-4-5"  = "eu.anthropic.claude-haiku-4-5"
+# }
+
+# Notifications: "outbox" stores them only; "live" sends email (Microsoft Graph) and Teams cards.
+notify_mode   = "outbox"
+email_backend = "graph"
+# email_from      = "ap-automation@example.com"
+# graph_tenant_id = "<tenant-id>"
+# graph_client_id = "<app-registration-client-id>"
+
+alarm_email = ""
