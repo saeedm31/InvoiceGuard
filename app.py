@@ -80,9 +80,10 @@ def _shared_key() -> str | None:
 
 
 SHARED_KEY = _shared_key()
+BEDROCK = os.getenv("LLM_PROVIDER", "anthropic") == "bedrock"  # company AWS account: the task role, no key
 
 
-@st.cache_resource(show_spinner="Starting the ERP, documents and mail MCP servers (first start only)...")
+@st.cache_resource(show_spinner="Starting the ERP, documents, mail and notify MCP servers (first start only)...")
 def service():
     return open_service(C.Settings().data_dir)
 
@@ -134,12 +135,15 @@ with st.sidebar:
     st.warning("**Simulated company** (Meridian Transport Group): 40 suppliers, 32 invoices. All names are fake.", icon="🧪")
     st.divider()
     st.markdown("**AI settings**")
-    modes = (["AI (Claude)"] if SHARED_KEY else []) + ["Demo (scripted, no AI)", "Live (your Anthropic key)"]
+    modes = (["AI (Claude)"] if SHARED_KEY or BEDROCK else []) + ["Demo (scripted, no AI)"] \
+        + ([] if BEDROCK else ["Live (your Anthropic key)"])
     mode = st.radio("Mode", modes, index=0)
     api_key = SHARED_KEY if mode.startswith("AI") else None
     if mode.startswith("Live"):
         api_key = st.text_input("Anthropic API key", type="password", help="Used only for this session. Never stored or logged.")
-    if mode.startswith("AI"):
+    if mode.startswith("AI") and BEDROCK:
+        st.caption(f"Claude on Amazon Bedrock ({svc.s.aws_region}), with this app's AWS role. No API key.")
+    elif mode.startswith("AI"):
         st.caption(f"Free to try: up to €{SESSION_EUR:.2f} per visitor and €{DAILY_EUR:.2f} per day.")
     model = st.selectbox("Model", list(AGENT_MODELS), format_func=AGENT_MODELS.get,
                          index=list(AGENT_MODELS).index(svc.s.agent_model) if svc.s.agent_model in AGENT_MODELS else 0,
@@ -159,14 +163,17 @@ with st.sidebar:
         st.rerun()
 
 st.markdown(HERO, unsafe_allow_html=True)
-tabs = st.tabs(["📥 Inbox", "🔍 Case file", "✋ Approvals", "🧪 Evals", "🛡️ Security", "🧭 How it works", "🧾 Audit log"])
-tab_inbox, tab_case, tab_appr, tab_eval, tab_sec, tab_how, tab_audit = tabs
+tabs = st.tabs(["📥 Inbox", "🔍 Case file", "✋ Approvals", "📣 Outbox", "🧪 Evals", "🛡️ Security", "🧭 How it works",
+                "🧾 Audit log"])
+tab_inbox, tab_case, tab_appr, tab_out, tab_eval, tab_sec, tab_how, tab_audit = tabs
+if st.query_params.get("case"):  # links in Teams cards open a case
+    ss.setdefault("case_pick", st.query_params["case"])
 
 
 def can_run() -> str | None:
     if mode.startswith("Demo"):
         return None
-    if not api_key:
+    if not api_key and not (BEDROCK and mode.startswith("AI")):
         return "Enter your Anthropic API key in the sidebar, or pick Demo mode."
     if mode.startswith("AI") and spend["eur"] >= DAILY_EUR:
         return "Today's free AI budget is used up. Try Demo mode, or your own key in Live mode."
@@ -304,8 +311,18 @@ with tab_case:
                 st.dataframe(pd.DataFrame(inv["lines"]), hide_index=True, width="stretch")
         with right:
             if note.get("email_body"):
-                st.markdown("**Email draft to the supplier** (saved as a draft; a person sends it)")
-                st.text_area("Draft", note["email_body"], height=220, label_visibility="collapsed")
+                st.markdown("**Email to the supplier** (the AI drafted it; a person reviews and sends)")
+                subj = st.text_input("Subject", note.get("email_subject") or f"Invoice {case['doc_id']}", key=f"subj-{cid}")
+                body = st.text_area("Draft", note["email_body"], height=220, label_visibility="collapsed", key=f"body-{cid}")
+                if st.button("✉ Send to the supplier", key=f"send-{cid}",
+                             help="Sent as the AP clerk. The address comes from the vendor master, not from the invoice."):
+                    r = svc.send_to_supplier(cid, "ana.costa", subj, body)
+                    (st.success if r["ok"] else st.error)(f"{r['status']}: {r['detail']}" if r["ok"] else r["error"])
+            msgs = svc.outbox(cid)
+            if msgs:
+                st.markdown("**Notifications for this case** (📣 Outbox has all)")
+                for m in msgs:
+                    st.markdown(f"- {'✉' if m['channel'] == 'email' else '💬'} {m['name']}: {m['subject']} · `{m['status']}`")
             st.markdown("**What happened in the ERP**")
             for a in p.get("actions") or []:
                 st.markdown(f"- `{a[0]}`: {a[1] if isinstance(a[1], str) else json.dumps(a[1])}")
@@ -341,6 +358,33 @@ with tab_appr:
             if b.button("Decline", key=f"no-{c['case_id']}"):
                 svc.decline(c["case_id"], who, "declined in review")
                 st.rerun()
+
+# ---------- outbox ----------
+with tab_out:
+    nmode = svc.notify_mode()
+    st.markdown("Email and Teams messages come from the **notify MCP server**. Code decides who is told what: the "
+                "AP manager when an invoice waits for approval, the fraud channel when an IBAN changed or a PDF hides "
+                "instructions, and the supplier when a clerk sends the drafted email. Recipients are directory keys, "
+                "never addresses, so text in an invoice cannot redirect a message.")
+    if nmode == "live":
+        st.success("NOTIFY_MODE=live: messages are delivered (Microsoft Graph, SES or SMTP; Teams Workflows webhook).")
+    else:
+        st.info("Demo: NOTIFY_MODE=outbox, so messages are stored here and nothing leaves the app. Set NOTIFY_MODE=live "
+                "with Microsoft Graph or SES credentials and Teams webhook URLs to deliver them.", icon="📭")
+    msgs = svc.outbox()
+    if not msgs:
+        st.info("No messages yet. Process a **big**, **bank** or **inject** invoice in the 📥 Inbox tab.")
+    else:
+        st.dataframe(pd.DataFrame([{
+            "time": m["created_at"][11:19], "via": "✉ email" if m["channel"] == "email" else "💬 Teams", "to": m["name"],
+            "subject": m["subject"], "case": m["ref"], "by": m["sent_by"], "status": m["status"]} for m in msgs]),
+            hide_index=True, width="stretch", height=300)
+        pick_m = st.selectbox("Read a message", range(len(msgs)),
+                              format_func=lambda i: f"{msgs[i]['msg_id']} · {msgs[i]['name']} · {msgs[i]['subject'][:60]}")
+        m = msgs[pick_m]
+        with st.container(border=True):
+            st.markdown(f"**{m['subject']}**  \nTo: {m['name']} (`{m['address']}`) · {m['status']}: {m['detail']}")
+            st.text(m["body"])
 
 # ---------- evals ----------
 with tab_eval:
@@ -385,6 +429,9 @@ with tab_sec:
         ("ASI06 Memory and context poisoning", "No long-term memory: every case starts clean from ERP facts."),
         ("ASI08 Cascading failures", "Step limit, tool timeouts, and any failure leaves the invoice unpaid."),
         ("ASI09 Human trust exploitation", "Approvers see the check table from the ERP, not just the model's summary."),
+        ("Outbound messages", "Notify tools are code-only. Recipients are directory keys, not addresses; supplier and "
+         "invoice names in messages come from the vendor master; links only point back to the app; rate limit per "
+         "recipient; every message is in the outbox and audit log."),
         ("Data protection", "IBANs are masked for the model and in logs; the ERP answers 'match: yes/no'. "
          "Claude via Amazon Bedrock in an EU region is one setting away."),
     ], columns=["Risk", "Control"]), hide_index=True, width="stretch")
@@ -406,9 +453,11 @@ with tab_how:
       explain [label="explain\\nLLM note + email\\n(numbers verified)"];
       act [label="act\\ncode: book, pay,\\nhold, reject"];
       human [label="person approves\\n(signed token)", shape=oval];
+      notify [label="notify MCP\\nemail + Teams\\n(code only)"];
       read -> extract -> agent; agent -> tools [label="needs data", style=dashed]; tools -> agent;
       agent -> check [label="findings", style=dashed]; check -> explain -> act;
       act -> human [label="over limit", style=dashed];
+      act -> notify [label="approval, fraud alert", style=dashed];
     }""")
     st.markdown("**MCP servers and tools** (live list from the running servers)")
     st.dataframe(pd.DataFrame([

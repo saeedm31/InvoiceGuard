@@ -53,7 +53,15 @@ A LangGraph state machine (a plain runner follows the same edges when LangGraph 
 | `documents` | `list_inbox`, `read_invoice` | code |
 | `erp` (read) | `find_vendor`, `get_vendor`, `check_bank_account`, `get_purchase_order`, `get_goods_receipts`, `find_invoices` | model and code |
 | `erp` (write) | `post_invoice`, `hold_invoice`, `reject_invoice`, `request_approval`, `schedule_payment` | code only |
-| `mail` | `draft_email`, `list_drafts` (there is no send tool) | code |
+| `mail` | `draft_email`, `list_drafts` | code |
+| `notify` | `send_email`, `post_teams`, `list_outbox`, `list_recipients` | code only |
+
+**Plugging in company tools.** Each system is its own MCP server, so adding one (Teams, ServiceNow, SAP) means adding a server, not changing the agent. The `notify` server shows the pattern for anything that leaves the company:
+
+- recipients are directory keys (`role:ap_manager`, `vendor:V1006`, `teams:ap-alerts`), never addresses, so text in an invoice cannot redirect a message;
+- code decides who is told what: the AP manager or CFO on Teams and email when an invoice waits for approval, the fraud channel when an IBAN changed or a PDF hides instructions, and the supplier only when a clerk clicks Send on the drafted email;
+- `NOTIFY_MODE=outbox` (the demo) stores messages in the 📣 Outbox tab; `live` sends through Microsoft Graph, Amazon SES or SMTP, and Teams Workflows webhooks;
+- rate limit per recipient, and every message goes to the outbox and the audit log.
 
 The app is the MCP client. On Streamlit Cloud each server runs as a child process over **stdio**; in `docker-compose` each runs as its own service over **Streamable HTTP** with DNS-rebinding protection. Built on the official MCP Python SDK v2 (`MCPServer`).
 
@@ -92,9 +100,13 @@ echo "APPROVAL_SECRET=$(openssl rand -hex 32)" > .env && docker compose up --bui
 
 Modes in the app: **Demo** (scripted model, not AI, free), **AI** (Claude on the app owner's key with per-visitor and daily caps), **Live** (your own key).
 
+## Deploy to AWS
+
+[`deploy/aws`](deploy/aws/README.md) has Terraform for a company AWS account: private VPC, load balancer with HTTPS and Entra ID single sign-on, ECS Fargate (app + MCP servers as sidecars), encrypted EFS, Secrets Manager with KMS, Claude on Amazon Bedrock limited to EU regions, CloudWatch alarms, and a GitHub Actions deploy through OIDC (no stored AWS keys) that runs the eval gate before every release.
+
 ## Stack
 
-Python 3.12 · LangGraph · MCP Python SDK v2 · Claude (Anthropic API or Amazon Bedrock) · Pydantic · SQLite · Streamlit · pytest · ruff · GitHub Actions · Docker
+Python 3.12 · LangGraph · MCP Python SDK v2 · Claude (Anthropic API or Amazon Bedrock) · Pydantic · SQLite · Streamlit · pytest · ruff · GitHub Actions · Docker · Terraform · AWS (ECS Fargate, ALB, EFS, Bedrock, Secrets Manager, KMS)
 
 ## Part of a series
 
