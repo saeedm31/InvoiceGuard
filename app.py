@@ -225,11 +225,6 @@ with tab_inbox:
             st.rerun()
         st.caption("Good ones to try: a **hidden instructions** or **inject price** invoice (prompt injection), "
                    "**bank** (changed IBAN), **big** (needs a person), **duplicate**.")
-        with st.expander(f"👁 See invoice {pick}", expanded=True):
-            show_invoice(pick, "inbox")
-            if labels[pick]["kind"] == "inject_clean":
-                st.caption("This one hides near-white, tiny text at the bottom: invisible on paper, but in the text "
-                           "the model reads. Run it and open the Case file.")
     with left:
         rows = []
         for d in sorted(labels):
@@ -246,6 +241,11 @@ with tab_inbox:
                      column_config={"Total (EUR)": st.column_config.NumberColumn(format="%.2f")})
         st.caption("The planted scenario is shown to help you try the demo. The agent never sees it: it lives in "
                    "the eval labels, which no MCP server serves.")
+        st.markdown(f"**Invoice {pick}** (the one selected on the right)")
+        show_invoice(pick, "inbox")
+        if labels[pick]["kind"] == "inject_clean":
+            st.caption("This one hides near-white, tiny text at the bottom: invisible on paper, but in the text "
+                       "the model reads. Run it and open the Case file.")
 
 
 def trace_rows(case_id: str) -> list[dict]:
