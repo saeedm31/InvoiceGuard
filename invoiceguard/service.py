@@ -89,6 +89,11 @@ class Service:
             sent.append(self.hub.call("send_email", {"recipient": role, "subject": f"Approval needed: {about}", "ref": case_id,
                                                      "body": f"Hello,\n\n{text}\n\nApprove or decline it in InvoiceGuard"
                                                              + (f": {link}" if link else ".") + "\n\nInvoiceGuard"}))
+        if res["status"] == "failed":  # the ERP refused or did not answer: a person must look, so say so
+            err = next((a[1] for a in reversed(res.get("actions") or []) if isinstance(a[1], str)), "no answer")
+            sent.append(self.hub.call("post_teams", {"channel": "teams:ap-alerts", "title": "Invoice case needs a person",
+                                                     "text": f"{about}. The ERP update failed: {err[:300]}. Case {case_id}.",
+                                                     "ref": case_id, "link": link}))
         alerts = [c["detail"] for c in res.get("checks") or [] if c["code"] == "BANK_MISMATCH" and not c["ok"]]
         if res.get("scan"):
             alerts.append("The PDF contains text aimed at AI systems (possible prompt injection).")
@@ -177,9 +182,12 @@ class Service:
         if not c or c["status"] != "awaiting_approval":
             return {"ok": False, "error": "This case is not waiting for approval."}
         r = self.hub.call("hold_invoice", {"invoice_id": c["invoice_id"], "reasons": [f"Declined by {approver}: {reason}"]})
-        self.audit.write("human_decline", dict(approver=approver, reason=reason, ok=r.ok), run_id=case_id, actor=approver)
+        self.audit.write("human_decline", dict(approver=approver, reason=reason, ok=r.ok, error=r.error),
+                         run_id=case_id, actor=approver)
+        if not r.ok:  # like approve(): the case changes only when the ERP did, so it stays in the queue
+            return {"ok": False, "error": f"The ERP did not hold the invoice, so the case is still waiting: {r.error}"}
         self._update(case_id, "on_hold", approver)
-        return {"ok": r.ok}
+        return {"ok": True}
 
 
 def open_service(data_dir: Path | None = None) -> Service:
