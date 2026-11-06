@@ -362,8 +362,10 @@ with tab_appr:
                 (st.success if r["ok"] else st.error)(
                     f"Payment {r['payment']['payment_id']} scheduled for {r['payment']['pay_on']}." if r["ok"] else r["error"])
             if b.button("Decline", key=f"no-{c['case_id']}"):
-                svc.decline(c["case_id"], who, "declined in review")
-                st.rerun()
+                r = svc.decline(c["case_id"], who, "declined in review")
+                if r["ok"]:
+                    st.rerun()
+                st.error(r["error"])
 
 # ---------- outbox ----------
 with tab_out:

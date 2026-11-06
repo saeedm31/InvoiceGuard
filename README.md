@@ -78,7 +78,7 @@ The app is the MCP client. On Streamlit Cloud each server runs as a child proces
 | ASI09 Human trust exploitation | Approvers see the ERP check table, not just the model's summary |
 | Data protection | Full IBANs never reach the model or the logs; the ERP answers "match: yes/no". Claude via Amazon Bedrock in an EU region is one setting (`LLM_PROVIDER=bedrock`) |
 
-Defence in depth: even if every model step were fooled, the ERP server refuses a payment unless the token is valid and unused, the supplier is active, and the IBAN matches the vendor master.
+Defence in depth: even if every model step were fooled, the ERP server refuses a payment unless the token is valid and unused, the supplier is active, and the IBAN matches the vendor master. It also takes a write lock before paying (two approvals at the same moment create one payment, not two) and only allows status changes that make sense: a scheduled or rejected invoice cannot be put back on hold or sent for approval again. If the ERP refuses a change, the case shows "failed" and the fraud channel is told, instead of showing a status the ERP does not have.
 
 ## Human in the loop
 
