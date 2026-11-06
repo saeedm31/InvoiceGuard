@@ -268,17 +268,18 @@ class InvoiceAgent:
             p = self._tool(state, "schedule_payment", {"invoice_id": iid, "approval_token": token})
             status = "scheduled" if p.ok else "failed"
             acts.append(("payment", p.data if p.ok else p.error))
-        elif d == "approve":
-            self._tool(state, "request_approval", {"invoice_id": iid, "reason": f"Total above the approval limit: {inv['gross']}"})
-            status = "awaiting_approval"
-        elif d == "reject":
-            self._tool(state, "reject_invoice", {"invoice_id": iid, "reason": "; ".join(reasons)})
-            status = "rejected"
-        else:
-            self._tool(state, "hold_invoice", {"invoice_id": iid, "reasons": reasons})
-            status = "on_hold"
+        else:  # the case shows the new status only if the ERP really has it
+            tool, args, target = {
+                "approve": ("request_approval", {"invoice_id": iid, "reason": f"Total above the approval limit: {inv['gross']}"},
+                            "awaiting_approval"),
+                "reject": ("reject_invoice", {"invoice_id": iid, "reason": "; ".join(reasons)}, "rejected"),
+            }.get(d, ("hold_invoice", {"invoice_id": iid, "reasons": reasons}, "on_hold"))
+            w = self._tool(state, tool, args)
+            status = target if w.ok else "failed"
+            if not w.ok:
+                acts.append((tool, w.error or "failed"))
             note = state.get("note") or {}
-            if v and note.get("email_body"):
+            if status == "on_hold" and v and note.get("email_body"):
                 m = self._tool(state, "draft_email", {"vendor_id": v["vendor_id"], "subject": note.get("email_subject")
                                                       or f"Invoice {inv['invoice_number']}", "body": note["email_body"]})
                 if m.ok:
