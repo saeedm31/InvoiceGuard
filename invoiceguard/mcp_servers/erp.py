@@ -133,11 +133,28 @@ def post_invoice(
     return {"invoice_id": invoice_id, "status": status}
 
 
+# Which status an invoice may move to, from which status. Repeating a change is allowed (safe to retry
+# after a timeout); anything else is refused, so a scheduled, paid or rejected invoice cannot be reopened.
+OPEN = ("parked", "posted", "awaiting_approval", "on_hold")
+ALLOWED_FROM = {
+    "on_hold": OPEN,
+    "rejected": OPEN + ("rejected",),
+    "awaiting_approval": ("posted", "awaiting_approval"),
+}
+PAYABLE = ("posted", "awaiting_approval")
+
+
 def _set_status(invoice_id: str, status: str, note: str) -> dict:
+    allowed = ALLOWED_FROM[status]
     with db() as con:
-        cur = con.execute("UPDATE invoices SET status=?, note=? WHERE invoice_id=?", (status, note[:1000], invoice_id))
+        cur = con.execute(  # check and change in one statement: no gap for a parallel change
+            f"UPDATE invoices SET status=?, note=? WHERE invoice_id=? AND status IN ({','.join('?' * len(allowed))})",
+            (status, note[:1000], invoice_id, *allowed))
         if not cur.rowcount:
-            raise ToolError(f"no invoice {invoice_id}")
+            row = con.execute("SELECT status FROM invoices WHERE invoice_id=?", (invoice_id,)).fetchone()
+            if not row:
+                raise ToolError(f"no invoice {invoice_id}")
+            raise ToolError(f"invoice {invoice_id} is {row['status']}; it cannot be set to {status}")
     return {"invoice_id": invoice_id, "status": status}
 
 
@@ -162,11 +179,14 @@ def request_approval(invoice_id: str, reason: str) -> dict:
 @server.tool(annotations=MONEY)
 def schedule_payment(invoice_id: str, approval_token: str) -> dict:
     """Schedule payment of a posted invoice. Needs a valid, unused approval token for this invoice and amount."""
-    with db() as con:
+    con = db()
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_payment_per_invoice ON payments(invoice_id)")
+    with con:
+        con.execute("BEGIN IMMEDIATE")  # take the write lock first: two approvals cannot both pass the checks
         inv = con.execute("SELECT * FROM invoices WHERE invoice_id=?", (invoice_id,)).fetchone()
         if not inv:
             raise ToolError(f"no invoice {invoice_id}")
-        if inv["status"] not in ("posted", "awaiting_approval"):
+        if inv["status"] not in PAYABLE:
             raise ToolError(f"invoice is {inv['status']}, cannot pay")
         ok, reason, claims = verify_token(approval_secret(data_dir()), approval_token, invoice_id, inv["gross"])
         if not ok:
