@@ -137,3 +137,96 @@ def test_big_invoice_notifies_the_approver_and_fraud_goes_to_alerts(tmp_path):
         assert any(m["recipient"] == "teams:ap-alerts" for m in svc.outbox(r2["case_id"]))
     finally:
         svc.hub.close()
+
+
+def test_decline_keeps_the_case_open_when_the_erp_hold_fails(tmp_path):
+    """Issue #1: a failed ERP hold must not move the case out of the approval queue."""
+    import sqlite3
+
+    from invoiceguard.service import open_service
+
+    svc = open_service(tmp_path)
+    try:
+        labels = json.loads(svc.s.labels.read_text())
+        big = [d for d, v in sorted(labels.items()) if v["kind"] == "big"]
+        bad, good = svc.process(big[0]), svc.process(big[1])
+        with sqlite3.connect(svc.s.cases_db) as con:  # the ERP does not know this invoice: hold_invoice fails
+            con.execute("UPDATE cases SET invoice_id='INV-MISSING' WHERE case_id=?", (bad["case_id"],))
+        r = svc.decline(bad["case_id"], "rui.matos", "test")
+        assert not r["ok"] and r["error"]
+        assert svc.case(bad["case_id"])["status"] == "awaiting_approval"
+        assert svc.decline(good["case_id"], "rui.matos", "test")["ok"]
+        assert svc.case(good["case_id"])["status"] == "on_hold"
+    finally:
+        svc.hub.close()
+
+
+def test_erp_refuses_status_changes_that_would_reopen_or_undo(tmp_path):
+    """A scheduled invoice cannot be put on hold, a rejected one cannot be sent for approval again."""
+    from invoiceguard.security import mint_token
+
+    build(tmp_path)
+    h = MCPHub(tmp_path)
+    try:
+        def post(no):
+            return h.call("post_invoice", dict(vendor_id="V1001", vendor_invoice_no=no, invoice_date="2026-10-01", net=1,
+                                               vat=0, gross=1, lines=[{"description": "x", "qty": 1, "unit_price": 1}],
+                                               source_doc="DOC-001")).data["invoice_id"]
+        rej = post("T-REJ")
+        assert h.call("reject_invoice", {"invoice_id": rej, "reason": "dup"}).ok
+        assert not h.call("request_approval", {"invoice_id": rej, "reason": "x"}).ok  # cannot reopen
+        assert h.call("reject_invoice", {"invoice_id": rej, "reason": "dup"}).ok  # retry is fine
+        held = post("T-HOLD")
+        assert h.call("hold_invoice", {"invoice_id": held, "reasons": ["a"]}).ok
+        assert h.call("hold_invoice", {"invoice_id": held, "reasons": ["a"]}).ok  # retry after a timeout is fine
+        tok = mint_token(config.approval_secret(tmp_path), held, 1.0, "human:test")
+        assert "on_hold" in h.call("schedule_payment", {"invoice_id": held, "approval_token": tok}).error
+    finally:
+        h.close()
+
+
+def test_two_approvals_at_once_pay_an_invoice_only_once(tmp_path):
+    """Two people approving the same invoice at the same moment must not create two payments."""
+    import sqlite3
+    import threading
+
+    from invoiceguard.security import mint_token
+
+    build(tmp_path)
+    h = MCPHub(tmp_path)
+    try:
+        with sqlite3.connect(tmp_path / "erp.db") as con:
+            v = con.execute("SELECT vendor_id, iban FROM vendors WHERE status='active' LIMIT 1").fetchone()
+        iid = h.call("post_invoice", dict(vendor_id=v[0], vendor_invoice_no="T-RACE", invoice_date="2026-10-01", net=100,
+                                          vat=0, gross=100, iban=v[1], source_doc="DOC-001",
+                                          lines=[{"description": "x", "qty": 1, "unit_price": 100}])).data["invoice_id"]
+        tokens = [mint_token(config.approval_secret(tmp_path), iid, 100.0, f"human:{n}") for n in ("a", "b")]
+        results = []
+        threads = [threading.Thread(target=lambda t=t: results.append(
+            h.call("schedule_payment", {"invoice_id": iid, "approval_token": t}))) for t in tokens]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        assert sorted(r.ok for r in results) == [False, True]
+        with sqlite3.connect(tmp_path / "erp.db") as con:
+            assert con.execute("SELECT COUNT(*) FROM payments WHERE invoice_id=?", (iid,)).fetchone()[0] == 1
+    finally:
+        h.close()
+
+
+def test_failed_erp_write_marks_the_case_failed_and_alerts(tmp_path):
+    """If the ERP refuses the approval request, the case says 'failed' and the alerts channel is told."""
+    from invoiceguard.mcp_hub import ToolResult
+    from invoiceguard.service import open_service
+
+    svc = open_service(tmp_path)
+    try:
+        real = svc.hub.call
+        svc.hub.call = lambda tool, args=None: (ToolResult(False, None, "ERP timeout", 0) if tool == "request_approval"
+                                                else real(tool, args))
+        big = next(d for d, v in sorted(json.loads(svc.s.labels.read_text()).items()) if v["kind"] == "big")
+        r = svc.process(big)
+        assert r["status"] == "failed" and ("request_approval", "ERP timeout") in [tuple(a) for a in r["actions"]]
+        assert not [c for c in svc.cases() if c["status"] == "awaiting_approval"]
+        assert any(m["recipient"] == "teams:ap-alerts" for m in svc.outbox(r["case_id"]))
+    finally:
+        svc.hub.close()
