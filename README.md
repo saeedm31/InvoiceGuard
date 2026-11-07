@@ -25,6 +25,13 @@ Unsafe payment = paid automatically when it should have been held, rejected or a
 
 ## How it works
 
+![How InvoiceGuard works](docs/architecture.svg)
+
+**Documentation:** [architecture](docs/architecture.md) · [data card](docs/data_card.md) · [evaluation](docs/evaluation.md) · [decision records](docs/adr/) · [AWS deploy](deploy/aws/README.md)
+
+<details>
+<summary>Same flow as a Mermaid diagram</summary>
+
 ```mermaid
 flowchart LR
   R[read<br/>documents MCP<br/>+ injection scan] --> E[extract<br/>LLM, fixed schema<br/>no tools]
@@ -36,6 +43,8 @@ flowchart LR
   X --> K[act<br/>code: book, pay,<br/>hold, reject]
   K -. over EUR 10k .-> H((person approves<br/>signed token))
 ```
+
+</details>
 
 A LangGraph state machine (a plain runner follows the same edges when LangGraph is not installed):
 
